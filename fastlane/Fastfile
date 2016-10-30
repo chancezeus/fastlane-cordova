@@ -38,8 +38,7 @@ def app_name_sanitized
 end
 
 def cordova_plist_path
-  "#{cordova_get_app_name}/#{cordova_get_app_name
-}-Info.plist"
+  "#{cordova_get_app_name}/#{cordova_get_app_name}-Info.plist"
 end
 
 def app_name_for(environment)
