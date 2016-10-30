@@ -401,7 +401,7 @@ platform :android do
     end
 
     Dir.glob("../platforms/android/build/outputs/apk/*-unaligned.apk").each do |apk|
-      alignedapk = apk.gsub(/-unaligned.apk$/, '.apk')
+      alignedapk = apk.gsub(/-unaligned.apk$/, "-#{stage}.apk")
 UI.message "zipalign -f #{apk} #{alignedapk}"
       unless system("zipalign -f 4 #{apk} #{alignedapk}")
         UI.error "Could not zipalign the apk"
