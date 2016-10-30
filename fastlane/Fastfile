@@ -12,17 +12,17 @@ config_file = File.expand_path("config.yml")
 begin
   config = YAML.load(open(config_file))
 rescue
-  Helper.log.error "Config file not found"
-  Helper.log.error "Please add a config.yml file in your fastlane directory"
-  Helper.log.error "Check http://github.com/platanus/fastlane-base for information"
-  Helper.log.error "about the structure of the config file"
+  UI.error "Config file not found"
+  UI.error "Please add a config.yml file in your fastlane directory"
+  UI.error "Check http://github.com/platanus/fastlane-base for information"
+  UI.error "about the structure of the config file"
   exit 1
 end
 
 config = OpenStruct.new(config)
 if config.stages.nil?
-  Helper.log.error "Required key missing (stages)"
-  Helper.log.error "Please add a stages key with the stages you want to define"
+  UI.error "Required key missing (stages)"
+  UI.error "Please add a stages key with the stages you want to define"
   exit 1
 end
 
@@ -258,33 +258,9 @@ platform :ios do
       username: stage_config['apple_id'],
       team_id: stage_config['team_id'],
       development: development,
-      generate_p12: false,
-      save_private_key: false,
-      output_path: "./fastlane",
-      new_profile: proc do |profile_path|
-        require 'openssl'
-        require 'aws-sdk'
-
-        pem = File.read(profile_path)
-        pkey = OpenSSL::PKey::RSA.new(pem)
-        cert = OpenSSL::X509::Certificate.new(pem)
-
-        Aws.config[:region] = 'us-east-1'
-        sns = Aws::SNS::Client.new
-
-        resp = sns.create_platform_application({
-          name: app_id,
-          platform: sandbox ? 'APNS_SANDBOX' : 'APNS',
-          attributes: { # required
-            'PlatformCredential' => pkey.to_s,
-            'PlatformPrincipal' => cert.to_s
-          }
-        })
-
-        puts "------------------ A new Application was created in AWS SNS ------------------ ".yellow
-        puts "Application Name: #{app_id}".yellow
-        puts "Application ARN: #{resp.platform_application_arn}".yellow
-      end
+      generate_p12: true,
+      save_private_key: true,
+      output_path: "./fastlane"
     )
   end
 
@@ -307,6 +283,7 @@ end
 platform :android do
   desc "Deploy app to playstore"
   desc "Params:"
+  desc "force_download: true|false"
   desc "stage: Application build environment"
   lane :deploy do |options|
     do_playstore(options)
@@ -315,60 +292,60 @@ platform :android do
   desc "Generate or download key"
   desc "Params:"
   desc "force_download: true|false"
-  desc "stage: true|false"
+  desc "stage: Application build environment"
   lane :keystore do |options|
     stage = options[:stage]
     stage_config = config.stages[stage]
     app_id = app_id_for('production')
-    workspace = Match::GitHelper.clone(google_git_url, true)
+    workspace = Match::GitHelper.clone(stage_config["google_url"], true)
     keystore = File.join(workspace, "#{app_id}.keystore")
-    unless File.exist?(keystore) && system("cd #{workspace} && keytool -list -keystore #{app_id}.keystore -alias #{stage} -storepass #{stage_config[:storepass]}")
-      unless stage_config[:common_name]
-        Helper.log.error "Missing common_name"
+    unless File.exist?(keystore) && system("cd #{workspace} && keytool -list -keystore #{app_id}.keystore -alias #{stage} -storepass #{stage_config["storepass"]}")
+      unless stage_config["common_name"]
+        UI.error "Missing common_name"
         exit 1
       end
 
-      unless stage_config[:organizational_unit]
-        Helper.log.error "Missing common_name"
+      unless stage_config["organizational_unit"]
+        UI.error "Missing common_name"
         exit 1
       end
 
-      unless stage_config[:organization]
-        Helper.log.error "Missing common_name"
+      unless stage_config["common_name"]
+        UI.error "Missing common_name"
         exit 1
       end
 
-      unless stage_config[:location]
-        Helper.log.error "Missing common_name"
+      unless stage_config["location"]
+        UI.error "Missing common_name"
         exit 1
       end
 
-      unless stage_config[:state]
-        Helper.log.warn "Missing state"
+      unless stage_config["state"]
+        UI.warn "Missing state"
       end
 
-      unless stage_config[:country]
-        Helper.log.error "Missing country"
+      unless stage_config["country"]
+        UI.error "Missing country"
         exit 1
       end
 
-      unless stage_config[:storepass]
-        Helper.log.error "Missing storepass"
+      unless stage_config["storepass"]
+        UI.error "Missing storepass"
         exit 1
       end
 
-      unless stage_config[:keypass]
-        Helper.log.error "Missing keypass"
+      unless stage_config["keypass"]
+        UI.error "Missing keypass"
         exit 1
       end
 
-      unless system("cd #{workspace} && keytool -genkey -v -keystore #{app_id}.keystore -dname \"CN=#{stage_config[:common_name]}, OU=#{stage_config[:organizational_unit]}, O=#{stage_config[:organization]}, L=#{stage_config[:location]}, S=#{stage_config[:state]}, C=#{stage_config[:country]}\" -alias #{stage} -keyalg RSA -keysize 2048 -validity 10000 -storepass #{stage_config[:storepass]} -keypass #{stage_config[:keypass]}")
-        Helper.log.error "Unable to create or read stage key"
-        Helper.log.error "Check your store/key passwords and validate they are correct"
+      unless system("cd #{workspace} && keytool -genkey -v -keystore #{app_id}.keystore -dname \"CN=#{stage_config["common_name"]}, OU=#{stage_config["organizational_unit"]}, O=#{stage_config["organization"]}, L=#{stage_config["location"]}, S=#{stage_config["state"]}, C=#{stage_config["country"]}\" -alias #{stage} -keyalg RSA -keysize 2048 -validity 10000 -storepass #{stage_config["storepass"]} -keypass #{stage_config["keypass"]}")
+        UI.error "Unable to create or read stage key"
+        UI.error "Check your store/key passwords and validate they are correct"
         exit 1
       end
       message = Match::GitHelper.generate_commit_message({app_identifier: app_id, type: 'keystore'})
-      Match::GitHelper.commit_changes(workspace, message, google_git_url)
+      Match::GitHelper.commit_changes(workspace, message, stage_config["google_url"])
     end
     keystore
   end
@@ -384,31 +361,31 @@ platform :android do
     stage_config = config.stages[stage]
     command = config[:cordova_command] || "cordova"
 
-    unless system("#{command} prepare --env=#{stage}")
-      Helper.log.error "Unable to prepare android project"
+    unless system("#{command} prepare android --env=#{stage}")
+      UI.error "Unable to prepare android project"
       exit 1
     end
 
-    unless system("#{command} build --env=#{stage} --device --release")
-      Helper.log.error "Unable to build android project"
+    unless system("#{command} build android --env=#{stage} --device --release")
+      UI.error "Unable to build android project"
       exit 1
     end
   end
 
   private_lane :sign do |options|
-    keystore_path = keystore()
+    keystore_path = keystore(options)
     stage = options[:stage]
     stage_config = config.stages[stage]
 
-    unless File.directory?("platforms/android/build/outputs/apk")
-      Helper.log.error "The apk output director does not exist"
+    unless File.directory?("../platforms/android/build/outputs/apk")
+      UI.error "The apk output directory does not exist"
       exit 1
     end
 
-    Dir.glob("platforms/android/build/outputs/apk/*-release-unsigned.apk").each do |apk|
+    Dir.glob("../platforms/android/build/outputs/apk/*-release-unsigned.apk").each do |apk|
       signedapk = apk.gsub(/-unsigned.apk$/, '-unaligned.apk')
-      unless system("jarsigner -verbose -sigalg SHA1withRSA -digestalg SHA1 -keystore #{keystore_path} #{apk} #{stage} -storepass #{stage_config[:storepass]} -keypass #{stage_config[:keypass]} -signedjar #{signedapk}")
-        Helper.log.error "Unable to sign apk: #{apk}"
+      unless system("jarsigner -verbose -sigalg SHA1withRSA -digestalg SHA1 -keystore #{keystore_path} #{apk} #{stage} -storepass #{stage_config["storepass"]} -keypass #{stage_config["keypass"]} -signedjar #{signedapk}")
+        UI.error "Unable to sign apk: #{apk}"
         exit 1
       end
     end
@@ -418,15 +395,16 @@ platform :android do
     stage = options[:stage]
     app_id = app_id_for(stage)
 
-    unless File.directory?("platforms/android/build/outputs/apk")
-      Helper.log.error "The apk output director does not exist"
+    unless File.directory?("../platforms/android/build/outputs/apk")
+      UI.error "The apk output director does not exist"
       exit 1
     end
 
-    Dir.glob("platforms/android/build/outputs/apk/*-unaligned.apk").each do |apk|
+    Dir.glob("../platforms/android/build/outputs/apk/*-unaligned.apk").each do |apk|
       alignedapk = apk.gsub(/-unaligned.apk$/, '.apk')
+UI.message "zipalign -v 4 #{apk} #{alignedapk}"
       unless system("zipalign -v 4 #{apk} #{alignedapk}")
-        Helper.log.error "Could not zipalign the apk"
+        UI.error "Could not zipalign the apk"
         exit 1
       end
     end
