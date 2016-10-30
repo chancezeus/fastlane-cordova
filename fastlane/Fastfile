@@ -29,7 +29,7 @@ end
 # Public methods
 
 def cordova_project_path
-  "platforms/ios/#{app_name_sanitized}.xcodeproj"
+  "platforms/ios/#{cordova_get_app_name}.xcodeproj"
 end
 
 # http://stackoverflow.com/questions/1939333/how-to-make-a-ruby-string-safe-for-a-filesystem
@@ -38,7 +38,8 @@ def app_name_sanitized
 end
 
 def cordova_plist_path
-  "#{app_name_sanitized}/#{app_name_sanitized}-Info.plist"
+  "#{cordova_get_app_name}/#{cordova_get_app_name
+}-Info.plist"
 end
 
 def app_name_for(environment)
@@ -68,7 +69,7 @@ platform :ios do
   end
 
   desc "Create app ids for each of the stages"
-  lane :create do |options|
+  lane :create do
     config.stages.each_key do |stage|
       stage_config = config.stages[stage]
       app_name = app_name_for(stage)
@@ -290,7 +291,6 @@ platform :ios do
 end
 
 platform :android do
-
   desc "Deploy app to playstore"
   desc "Params:"
   desc "stage: Application build environment"
@@ -301,13 +301,58 @@ platform :android do
   desc "Generate or download key"
   desc "Params:"
   desc "force_download: true|false"
+  desc "stage: true|false"
   lane :keystore do |options|
+    stage = options[:stage]
+    stage_config = config.stages[stage]
     app_id = app_id_for('production')
     workspace = Match::GitHelper.clone(google_git_url, true)
     keystore = File.join(workspace, "#{app_id}.keystore")
-    unless File.exist?(keystore)
-      # TODO: Get storepass and keypass from somewhere
-      sh "cd #{workspace}; keytool -genkey -v -keystore #{app_id}.keystore -dname \"CN=us.platan, OU=Platanus, O=Platanus, L=Santiago, S=, C=CL\" -alias alias_name -keyalg RSA -keysize 2048 -validity 10000 -storepass holahola -keypass holahola"
+    unless File.exist?(keystore) && system("cd #{workspace} && keytool -list -keystore #{app_id}.keystore -alias #{stage} -storepass #{stage_config[:storepass]}")
+      unless stage_config[:common_name]
+        Helper.log.error "Missing common_name"
+        exit 1
+      end
+
+      unless stage_config[:organizational_unit]
+        Helper.log.error "Missing common_name"
+        exit 1
+      end
+
+      unless stage_config[:organization]
+        Helper.log.error "Missing common_name"
+        exit 1
+      end
+
+      unless stage_config[:location]
+        Helper.log.error "Missing common_name"
+        exit 1
+      end
+
+      unless stage_config[:state]
+        Helper.log.warn "Missing state"
+      end
+
+      unless stage_config[:country]
+        Helper.log.error "Missing country"
+        exit 1
+      end
+
+      unless stage_config[:storepass]
+        Helper.log.error "Missing storepass"
+        exit 1
+      end
+
+      unless stage_config[:keypass]
+        Helper.log.error "Missing keypass"
+        exit 1
+      end
+
+      unless system("cd #{workspace} && keytool -genkey -v -keystore #{app_id}.keystore -dname \"CN=#{stage_config[:common_name]}, OU=#{stage_config[:organizational_unit]}, O=#{stage_config[:organization]}, L=#{stage_config[:location]}, S=#{stage_config[:state]}, C=#{stage_config[:country]}\" -alias #{stage} -keyalg RSA -keysize 2048 -validity 10000 -storepass #{stage_config[:storepass]} -keypass #{stage_config[:keypass]}")
+        Helper.log.error "Unable to create or read stage key"
+        Helper.log.error "Check your store/key passwords and validate they are correct"
+        exit 1
+      end
       message = Match::GitHelper.generate_commit_message({app_identifier: app_id, type: 'keystore'})
       Match::GitHelper.commit_changes(workspace, message, google_git_url)
     end
@@ -322,22 +367,56 @@ platform :android do
 
   private_lane :build do |options|
     stage = options[:stage]
-    sh "cordova prepare --env=#{stage}"
-    sh "cd ..; ionic build android --env=#{stage} --release"
+    stage_config = config.stages[stage]
+    command = config[:cordova_command] || "cordova"
+
+    unless system("#{command} prepare --env=#{stage}")
+      Helper.log.error "Unable to prepare android project"
+      exit 1
+    end
+
+    unless system("#{command} build --env=#{stage} --device --release")
+      Helper.log.error "Unable to build android project"
+      exit 1
+    end
   end
 
   private_lane :sign do |options|
     keystore_path = keystore()
-    # TODO: Get storepass and keypass from somewhere
-    sh "cd ..; jarsigner -verbose -sigalg SHA1withRSA -digestalg SHA1 -keystore #{keystore_path} platforms/android/build/outputs/apk/android-release-unsigned.apk alias_name -storepass holahola -keypass holahola"
+    stage = options[:stage]
+    stage_config = config.stages[stage]
+
+    unless File.directory?("platforms/android/build/outputs/apk")
+      Helper.log.error "The apk output director does not exist"
+      exit 1
+    end
+
+    Dir.glob("platforms/android/build/outputs/apk/*-release-unsigned.apk").each do |apk|
+      signedapk = apk.gsub(/-unsigned.apk$/, '-unaligned.apk')
+      unless system("jarsigner -verbose -sigalg SHA1withRSA -digestalg SHA1 -keystore #{keystore_path} #{apk} #{stage} -storepass #{stage_config[:storepass]} -keypass #{stage_config[:keypass]} -signedjar #{signedapk}")
+        Helper.log.error "Unable to sign apk: #{apk}"
+        exit 1
+      end
+    end
   end
 
   private_lane :zipalign do |options|
     stage = options[:stage]
     app_id = app_id_for(stage)
-    sh "cd ..; zipalign -v 4 platforms/android/build/outputs/apk/android-release-unsigned.apk ./platforms/android/build/outputs/apk/#{app_id}.apk"
-  end
 
+    unless File.directory?("platforms/android/build/outputs/apk")
+      Helper.log.error "The apk output director does not exist"
+      exit 1
+    end
+
+    Dir.glob("platforms/android/build/outputs/apk/*-unaligned.apk").each do |apk|
+      alignedapk = apk.gsub(/-unaligned.apk$/, '.apk')
+      unless system("zipalign -v 4 #{apk} #{alignedapk}")
+        Helper.log.error "Could not zipalign the apk"
+        exit 1
+      end
+    end
+  end
 end
 
 # More information about multiple platforms in fastlane: https://github.com/KrauseFx/fastlane/blob/master/docs/Platforms.md
